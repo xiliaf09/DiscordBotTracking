@@ -6,25 +6,71 @@ class NotificationHandler:
     def __init__(self, bot):
         self.bot = bot
 
-    async def send_notification(self, channel_id: int, transaction_info: Dict):
-        """Envoie une notification Discord pour une transaction"""
-        print(f"Tentative d'envoi de notification dans le channel {channel_id}")
-        print(f"Informations de la transaction: {transaction_info}")
-        
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            print(f"❌ Channel {channel_id} non trouvé")
-            return
-        
-        print(f"Channel trouvé: {channel.name}")
-        embed = self._create_embed(transaction_info)
-        print("Embed créé, envoi de la notification...")
-        
+    async def send_notification(self, channel_id: int, tx_info: Dict):
+        """Envoie une notification de transaction dans le canal Discord spécifié"""
         try:
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                print(f"Canal {channel_id} non trouvé")
+                return
+
+            # Créer l'embed
+            embed = discord.Embed(
+                title="🔔 Nouvelle Transaction Détectée",
+                description=f"Hash: [{tx_info['hash']}](https://basescan.org/tx/{tx_info['hash']})",
+                color=0x3498db
+            )
+
+            # Ajouter les informations de base
+            embed.add_field(
+                name="📤 De",
+                value=f"[{tx_info['from']}](https://basescan.org/address/{tx_info['from']})",
+                inline=True
+            )
+            embed.add_field(
+                name="📥 À",
+                value=f"[{tx_info['to']}](https://basescan.org/address/{tx_info['to']})",
+                inline=True
+            )
+            
+            # Ajouter la valeur ETH si non nulle
+            if float(tx_info['value']) > 0:
+                embed.add_field(
+                    name="💰 Valeur ETH",
+                    value=f"{tx_info['value']} ETH",
+                    inline=True
+                )
+
+            # Ajouter les transferts de tokens
+            if tx_info.get('token_transfers'):
+                token_text = ""
+                for transfer in tx_info['token_transfers']:
+                    token_text += f"• {transfer['value']} {transfer['token_symbol']}"
+                    token_text += f" ({transfer['token_name']})\n"
+                    token_text += f"  De: [{transfer['from']}](https://basescan.org/address/{transfer['from']})\n"
+                    token_text += f"  À: [{transfer['to']}](https://basescan.org/address/{transfer['to']})\n\n"
+                
+                embed.add_field(
+                    name="🔄 Transferts de Tokens",
+                    value=token_text or "Aucun transfert de token",
+                    inline=False
+                )
+
+            # Ajouter les informations de gas
+            embed.add_field(
+                name="⛽ Gas",
+                value=f"Utilisé: {tx_info['gas_used']}\nPrix: {tx_info['gas_price']} Gwei",
+                inline=True
+            )
+
+            # Ajouter le timestamp
+            embed.set_footer(text=f"Block #{tx_info['block_number']} • {datetime.fromtimestamp(tx_info['timestamp'])}")
+
             await channel.send(embed=embed)
-            print("✅ Notification envoyée avec succès")
+            print(f"Notification envoyée dans le canal {channel_id}")
+
         except Exception as e:
-            print(f"❌ Erreur lors de l'envoi de la notification: {e}")
+            print(f"Erreur lors de l'envoi de la notification: {str(e)}")
 
     def _create_embed(self, tx_info: Dict) -> discord.Embed:
         """Crée un embed Discord pour la notification"""

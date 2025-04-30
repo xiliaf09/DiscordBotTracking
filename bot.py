@@ -131,12 +131,35 @@ async def get_transactions_for_address(address: str, from_block: int, to_block: 
             
             for tx in block.transactions:
                 if isinstance(tx, dict):
+                    tx_hash = tx['hash'].hex()
+                    
+                    # Vérifier les transactions directes
                     if direction == 'from' and tx['from'].lower() == address.lower():
-                        block_transactions.append(tx['hash'].hex())
-                        print(f"Transaction envoyée trouvée: {tx['hash'].hex()}")
+                        block_transactions.append(tx_hash)
+                        print(f"Transaction envoyée trouvée: {tx_hash}")
                     elif direction == 'to' and tx.get('to', '').lower() == address.lower():
-                        block_transactions.append(tx['hash'].hex())
-                        print(f"Transaction reçue trouvée: {tx['hash'].hex()}")
+                        block_transactions.append(tx_hash)
+                        print(f"Transaction reçue trouvée: {tx_hash}")
+                    
+                    # Vérifier les transferts de tokens
+                    try:
+                        receipt = w3.eth.get_transaction_receipt(tx_hash)
+                        if receipt and receipt.get('logs'):
+                            for log in receipt['logs']:
+                                # Vérifier si c'est un événement Transfer (0xddf252ad...)
+                                if len(log['topics']) >= 3 and log['topics'][0].hex() == '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef':
+                                    # Décoder les adresses from/to depuis les topics
+                                    from_addr = '0x' + log['topics'][1].hex()[-40:]
+                                    to_addr = '0x' + log['topics'][2].hex()[-40:]
+                                    
+                                    if (direction == 'from' and from_addr.lower() == address.lower()) or \
+                                       (direction == 'to' and to_addr.lower() == address.lower()):
+                                        if tx_hash not in block_transactions:
+                                            block_transactions.append(tx_hash)
+                                            print(f"Transfert de token trouvé: {tx_hash}")
+                    except Exception as e:
+                        print(f"Erreur lors de la vérification des logs pour {tx_hash}: {str(e)}")
+                        continue
         
         print(f"Nombre total de transactions {direction} trouvées: {len(block_transactions)}")
         return block_transactions

@@ -221,31 +221,21 @@ async def test_connection(ctx):
             latest_block = w3.eth.block_number
             block_msg = f"🔍 Dernier bloc: {latest_block}"
         except Exception as e:
-            block_msg = f"❌ Erreur bloc: {str(e)}"
+            logger.error(f"Erreur bloc: {str(e)}")
+            block_msg = "❌ Erreur lors de la récupération du bloc"
         
-        # Test de récupération d'une transaction récente
+        # Test de récupération d'une transaction récente de manière simplifiée
         try:
-            block = w3.eth.get_block('latest', full_transactions=True)
-            if block and block.get('transactions', []):
-                tx = block['transactions'][0]
-                # Formatage simplifié de la transaction
-                if isinstance(tx, (bytes, bytearray)):
-                    tx_hash = tx.hex()
-                elif isinstance(tx, str):
-                    tx_hash = tx
-                elif isinstance(tx, dict):
-                    tx_hash = tx.get('hash', '').hex() if isinstance(tx.get('hash'), (bytes, bytearray)) else str(tx.get('hash', ''))
-                else:
-                    tx_hash = str(tx)
-                
-                # Tronquer le hash pour l'affichage
-                short_hash = f"{tx_hash[:10]}...{tx_hash[-8:]}" if len(tx_hash) > 20 else tx_hash
+            block = w3.eth.get_block('latest')
+            if block and 'transactions' in block and block['transactions']:
+                tx_hash = block['transactions'][0].hex() if isinstance(block['transactions'][0], (bytes, bytearray)) else str(block['transactions'][0])
+                short_hash = f"{tx_hash[:10]}...{tx_hash[-8:]}"
                 tx_msg = f"📝 Dernière transaction: `{short_hash}`"
             else:
-                tx_msg = "❌ Aucune transaction trouvée dans le dernier bloc"
+                tx_msg = "❌ Aucune transaction dans le dernier bloc"
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération de la transaction: {str(e)}")
-            tx_msg = "❌ Erreur lors de la récupération de la transaction"
+            logger.error(f"Erreur transaction: {str(e)}")
+            tx_msg = "❌ Erreur lors de la récupération des transactions"
             
         # Test de l'API Alchemy
         alchemy_api_key = os.getenv('ALCHEMY_API_KEY')
@@ -259,7 +249,7 @@ async def test_connection(ctx):
                 logger.error(f"Erreur Alchemy: {str(e)}")
                 alchemy_msg = "❌ Erreur de connexion Alchemy"
         else:
-            alchemy_msg = "⚠️ Pas de clé Alchemy configurée dans les variables d'environnement"
+            alchemy_msg = "⚠️ Pas de clé Alchemy configurée"
         
         # Envoyer le rapport
         status_report = f"""

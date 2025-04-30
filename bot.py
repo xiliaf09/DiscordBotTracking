@@ -500,14 +500,23 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
             inline=False
         )
 
-        # Montant ETH
+        # Montant ETH et destinataire/expéditeur sur la même ligne
         value_eth = w3.from_wei(tx['value'], 'ether')
         if value_eth > 0:
-            embed.add_field(
-                name="💰 Montant ETH",
-                value=f"```{value_eth:.4f} ETH```",
-                inline=True
-            )
+            if is_outgoing:
+                to_short = f"{tx['to'][:6]}...{tx['to'][-4:]}"
+                embed.add_field(
+                    name="💰 Montant ETH | 👥 Destinataire",
+                    value=f"```{value_eth:.4f} ETH``` | `{to_short}`",
+                    inline=False
+                )
+            else:
+                from_short = f"{tx['from'][:6]}...{tx['from'][-4:]}"
+                embed.add_field(
+                    name="💰 Montant ETH | 👥 Expéditeur",
+                    value=f"```{value_eth:.4f} ETH``` | `{from_short}`",
+                    inline=False
+                )
 
         # Détection et analyse des tokens ERC20
         logs = receipt.get('logs', [])
@@ -539,51 +548,16 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
                         action = "🟢 ACHAT" if to_address.lower() == address.lower() else "🔴 VENTE"
                         embed.add_field(
                             name=f"{action}",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**\n`{token_address}`",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**",
                             inline=False
                         )
                     else:
                         action = "📥 Reçu" if to_address.lower() == address.lower() else "📤 Envoyé"
                         embed.add_field(
                             name=f"{action}",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**\n`{token_address}`",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**",
                             inline=False
                         )
-
-        # Adresses (en format court)
-        if is_outgoing:
-            to_short = f"{tx['to'][:6]}...{tx['to'][-4:]}"
-            embed.add_field(
-                name="👥 Destinataire",
-                value=f"`{to_short}`",
-                inline=True
-            )
-        else:
-            from_short = f"{tx['from'][:6]}...{tx['from'][-4:]}"
-            embed.add_field(
-                name="👥 Expéditeur",
-                value=f"`{from_short}`",
-                inline=True
-            )
-
-        # Informations techniques
-        gas_used = receipt['gasUsed']
-        gas_price = w3.from_wei(tx['gasPrice'], 'gwei')
-        total_gas_eth = w3.from_wei(gas_used * tx['gasPrice'], 'ether')
-        
-        embed.add_field(
-            name="⛽ Gas",
-            value=f"```{total_gas_eth:.6f} ETH```\nGas utilisé: {gas_used}\nGas price: {gas_price:.2f} Gwei",
-            inline=True
-        )
-
-        # Block et timestamp
-        block_time = datetime.datetime.fromtimestamp(w3.eth.get_block(receipt['blockNumber'])['timestamp'])
-        embed.add_field(
-            name="📊 Block",
-            value=f"`{receipt['blockNumber']}`\n{block_time.strftime('%H:%M:%S')}",
-            inline=True
-        )
 
         # Lien Basescan (en bas)
         embed.add_field(

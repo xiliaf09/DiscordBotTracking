@@ -248,6 +248,7 @@ async def on_ready():
 
 async def monitor_addresses():
     """Surveille les transactions pour les adresses trackées"""
+    global w3
     last_checked_block = {}
     consecutive_errors = 0
     max_consecutive_errors = 5
@@ -258,7 +259,6 @@ async def monitor_addresses():
             # Vérifier la connexion Web3
             if not w3.is_connected():
                 logger.error("Connexion Web3 perdue, tentative de reconnexion...")
-                global w3
                 w3 = setup_web3_connection()
                 if not w3.is_connected():
                     await asyncio.sleep(30)

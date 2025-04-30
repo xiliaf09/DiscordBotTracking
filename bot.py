@@ -268,6 +268,50 @@ async def test_connection(ctx):
         logger.error(error_msg)
         await ctx.send(error_msg)
 
+@bot.command(name='alchemytest')
+async def alchemy_test(ctx):
+    """Teste explicitement la connexion à Alchemy et affiche le résultat"""
+    try:
+        # Configuration d'une connexion directe à Alchemy
+        alchemy_url = "https://base-mainnet.g.alchemy.com/v2/0mT-QZ3Jim1d81aTEh93YkE3UK8bpmTc"
+        w3_alchemy = Web3(Web3.HTTPProvider(
+            alchemy_url,
+            request_kwargs={
+                'timeout': 30,
+                'headers': {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                }
+            }
+        ))
+
+        # Test de connexion basique
+        is_connected = w3_alchemy.is_connected()
+        if not is_connected:
+            await ctx.send("❌ Impossible de se connecter à Alchemy")
+            return
+
+        # Récupération du bloc spécifique (comme dans l'exemple)
+        block = w3_alchemy.eth.get_block(123456)
+        
+        # Formatage de la réponse
+        response = f"""✅ **Test Alchemy réussi !**
+
+🔍 **Bloc 123456** :
+• Hash: `{block['hash'].hex()}`
+• Parent Hash: `{block['parentHash'].hex()}`
+• Timestamp: {block['timestamp']}
+• Nombre de transactions: {len(block['transactions'])}
+
+🌐 **URL**: `{alchemy_url}`"""
+        
+        await ctx.send(response)
+        
+    except Exception as e:
+        error_msg = f"❌ Erreur lors du test Alchemy : {str(e)}"
+        logger.error(error_msg)
+        await ctx.send(error_msg)
+
 async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = True):
     """Traite une transaction et envoie une notification Discord"""
     try:

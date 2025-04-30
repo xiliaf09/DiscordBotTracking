@@ -488,10 +488,11 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         # Création de l'embed
         embed = discord.Embed(
             title="🔄 Nouvelle Transaction",
-            color=0x00ff00,
+            color=0x00ff00 if is_outgoing else 0x0000ff,
+            timestamp=datetime.datetime.utcnow()
         )
 
-        # Informations de base
+        # Type de transaction
         direction = "envoyée" if is_outgoing else "reçue"
         embed.add_field(
             name="Type",
@@ -503,7 +504,7 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         value_eth = w3.from_wei(tx['value'], 'ether')
         if value_eth > 0:
             embed.add_field(
-                name="Montant ETH",
+                name="💰 Montant ETH",
                 value=f"```{value_eth:.4f} ETH```",
                 inline=True
             )
@@ -535,50 +536,61 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
                     
                     # Construire le message selon le type
                     if is_swap:
-                        action = "Acheté" if to_address.lower() == address.lower() else "Vendu"
+                        action = "🟢 ACHAT" if to_address.lower() == address.lower() else "🔴 VENTE"
                         embed.add_field(
-                            name=f"Token {token_info['symbol']} ({action})",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n*{token_info['name']}*\n`{token_address}`",
-                            inline=True
+                            name=f"{action}",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**\n`{token_address}`",
+                            inline=False
                         )
                     else:
-                        action = "Reçu" if to_address.lower() == address.lower() else "Envoyé"
+                        action = "📥 Reçu" if to_address.lower() == address.lower() else "📤 Envoyé"
                         embed.add_field(
-                            name=f"Token {token_info['symbol']} ({action})",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n*{token_info['name']}*\n`{token_address}`",
-                            inline=True
+                            name=f"{action}",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**\n`{token_address}`",
+                            inline=False
                         )
 
-        # Adresses
+        # Adresses (en format court)
         if is_outgoing:
+            to_short = f"{tx['to'][:6]}...{tx['to'][-4:]}"
             embed.add_field(
-                name="Destinataire",
-                value=f"`{tx['to']}`",
-                inline=False
+                name="👥 Destinataire",
+                value=f"`{to_short}`",
+                inline=True
             )
         else:
+            from_short = f"{tx['from'][:6]}...{tx['from'][-4:]}"
             embed.add_field(
-                name="Expéditeur",
-                value=f"`{tx['from']}`",
-                inline=False
+                name="👥 Expéditeur",
+                value=f"`{from_short}`",
+                inline=True
             )
 
         # Informations techniques
+        gas_used = receipt['gasUsed']
+        gas_price = w3.from_wei(tx['gasPrice'], 'gwei')
+        total_gas_eth = w3.from_wei(gas_used * tx['gasPrice'], 'ether')
+        
         embed.add_field(
-            name="Détails",
-            value=f"Block: `{receipt['blockNumber']}`\nGas utilisé: `{receipt['gasUsed']}`",
-            inline=False
+            name="⛽ Gas",
+            value=f"```{total_gas_eth:.6f} ETH```\nGas utilisé: {gas_used}\nGas price: {gas_price:.2f} Gwei",
+            inline=True
+        )
+
+        # Block et timestamp
+        block_time = datetime.datetime.fromtimestamp(w3.eth.get_block(receipt['blockNumber'])['timestamp'])
+        embed.add_field(
+            name="📊 Block",
+            value=f"`{receipt['blockNumber']}`\n{block_time.strftime('%H:%M:%S')}",
+            inline=True
         )
 
         # Lien Basescan (en bas)
         embed.add_field(
             name="🔍 Explorer",
-            value=f"[Voir la transaction sur Basescan](https://basescan.org/tx/{tx_hash})",
+            value=f"[Voir sur Basescan](https://basescan.org/tx/{tx_hash})",
             inline=False
         )
-
-        # Timestamp
-        embed.timestamp = datetime.datetime.utcnow()
         
         # Envoi de la notification
         if address in tracking_configs and 'channel_id' in tracking_configs[address]:

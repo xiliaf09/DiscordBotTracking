@@ -35,7 +35,6 @@ if ALCHEMY_API_KEY:
         print(f"Connecté à Alchemy avec succès! Version de l'API: {w3.api}")
     else:
         print("Impossible de se connecter à Alchemy, utilisation du RPC public...")
-        # Fallback sur le RPC public
         w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
 else:
     print("Pas de clé Alchemy configurée, utilisation du RPC public...")
@@ -70,47 +69,66 @@ async def on_ready():
 async def monitor_addresses():
     while True:
         try:
+            if not tracking_configs:
+                await asyncio.sleep(5)
+                continue
+
             current_block = w3.eth.block_number
+            
             for address, config in tracking_configs.items():
                 if current_block > config.last_block:
-                    # Vérifier les nouvelles transactions
-                    transactions = await get_new_transactions(address, config.last_block, current_block)
-                    for tx in transactions:
-                        tx_info = await tx_handler.process_transaction(tx, config)
+                    # Récupérer les transactions pour cette plage de blocs
+                    from_block = config.last_block + 1
+                    to_block = current_block
+
+                    # Vérifier les transactions envoyées
+                    sent_txs = await get_transactions_for_address(address, from_block, to_block, 'from')
+                    
+                    # Vérifier les transactions reçues
+                    received_txs = await get_transactions_for_address(address, from_block, to_block, 'to')
+                    
+                    # Traiter toutes les transactions
+                    all_txs = sent_txs + received_txs
+                    for tx_hash in set(all_txs):  # Utiliser un set pour éviter les doublons
+                        tx_info = await tx_handler.process_transaction(tx_hash, config)
                         if tx_info:
                             await notif_handler.send_notification(config.channel_id, tx_info)
+                    
                     config.last_block = current_block
+
             await asyncio.sleep(1)  # Attendre 1 seconde entre chaque vérification
+            
         except Exception as e:
-            print(f"Erreur lors du monitoring: {e}")
+            print(f"Erreur lors du monitoring: {str(e)}")
             await asyncio.sleep(5)
 
-async def get_new_transactions(address: str, from_block: int, to_block: int) -> List[str]:
-    """Récupère les nouvelles transactions pour une adresse"""
-    # Rechercher les transactions où l'adresse est émetteur
-    from_filter = w3.eth.filter({
-        'fromBlock': from_block,
-        'toBlock': to_block,
-        'fromAddress': address
-    })
-    
-    # Rechercher les transactions où l'adresse est destinataire
-    to_filter = w3.eth.filter({
-        'fromBlock': from_block,
-        'toBlock': to_block,
-        'toAddress': address
-    })
-    
-    # Combiner les résultats
-    from_txs = await from_filter.get_all_entries()
-    to_txs = await to_filter.get_all_entries()
-    
-    # Extraire les hashes de transaction uniques
-    tx_hashes = set()
-    for tx in from_txs + to_txs:
-        tx_hashes.add(tx['transactionHash'].hex())
-    
-    return list(tx_hashes)
+async def get_transactions_for_address(address: str, from_block: int, to_block: int, direction: str) -> List[str]:
+    """Récupère les transactions pour une adresse dans une direction donnée"""
+    try:
+        # Construire le filtre en fonction de la direction
+        if direction == 'from':
+            transactions = w3.eth.get_transaction_count(address, to_block) - w3.eth.get_transaction_count(address, from_block - 1)
+            if transactions > 0:
+                block_transactions = []
+                for block_num in range(from_block, to_block + 1):
+                    block = w3.eth.get_block(block_num, full_transactions=True)
+                    for tx in block.transactions:
+                        if isinstance(tx, dict) and tx['from'].lower() == address.lower():
+                            block_transactions.append(tx['hash'].hex())
+                return block_transactions
+        else:  # direction == 'to'
+            block_transactions = []
+            for block_num in range(from_block, to_block + 1):
+                block = w3.eth.get_block(block_num, full_transactions=True)
+                for tx in block.transactions:
+                    if isinstance(tx, dict) and tx.get('to', '').lower() == address.lower():
+                        block_transactions.append(tx['hash'].hex())
+            return block_transactions
+        
+        return []
+    except Exception as e:
+        print(f"Erreur lors de la récupération des transactions ({direction}): {str(e)}")
+        return []
 
 @bot.command(name='track')
 async def track_address(ctx, address: str, *, filters: str = None):

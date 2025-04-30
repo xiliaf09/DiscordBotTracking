@@ -12,13 +12,22 @@ from notification_handler import NotificationHandler
 # Chargement des variables d'environnement
 load_dotenv()
 
+# Vérification des variables d'environnement requises
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+
+if not DISCORD_TOKEN:
+    raise ValueError("DISCORD_TOKEN n'est pas défini dans les variables d'environnement")
+if not ALCHEMY_API_KEY:
+    raise ValueError("ALCHEMY_API_KEY n'est pas défini dans les variables d'environnement")
+
 # Configuration du bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration Web3 avec Alchemy
-ALCHEMY_URL = "https://base-mainnet.g.alchemy.com/v2/" + os.getenv('ALCHEMY_API_KEY')
+ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
 
 # Vérification de la connexion
@@ -145,4 +154,4 @@ async def list_tracked(ctx):
     await ctx.send(message)
 
 # Lancer le bot
-bot.run(os.getenv('DISCORD_TOKEN')) 
+bot.run(DISCORD_TOKEN) 

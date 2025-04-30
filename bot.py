@@ -22,7 +22,7 @@ if not DISCORD_TOKEN:
 # Configuration du bot
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # Configuration Web3
 if ALCHEMY_API_KEY:
@@ -181,6 +181,50 @@ async def list_tracked(ctx):
             message += f"  Filtres: {json.dumps(config.filters, indent=2)}\n"
     
     await ctx.send(message)
+
+@bot.command(name='help')
+async def show_help(ctx):
+    """Affiche l'aide du bot"""
+    embed = discord.Embed(
+        title="📚 Aide - Base Tracking Bot",
+        description="Voici les commandes disponibles :",
+        color=0x3498db
+    )
+
+    embed.add_field(
+        name="!track <adresse> [filtres]",
+        value="Commence à tracker une adresse. Optionnellement avec des filtres.\n"
+              "Exemple: `!track 0x123... {\"token_address\": \"0x456...\", \"min_amount\": 1.0}`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="!untrack <adresse>",
+        value="Arrête de tracker une adresse.\n"
+              "Exemple: `!untrack 0x123...`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="!list",
+        value="Affiche la liste des adresses actuellement trackées.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="!help",
+        value="Affiche ce message d'aide.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📝 Filtres disponibles",
+        value="• `token_address`: Adresse du token à tracker\n"
+              "• `min_amount`: Montant minimum pour déclencher une alerte",
+        inline=False
+    )
+
+    await ctx.send(embed=embed)
 
 # Lancer le bot
 bot.run(DISCORD_TOKEN) 

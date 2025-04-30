@@ -488,8 +488,7 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         # Création de l'embed
         embed = discord.Embed(
             title="🔄 Nouvelle Transaction",
-            color=0x00ff00 if receipt['status'] == 1 else 0xff0000,
-            url=f"https://basescan.org/tx/{tx_hash}"
+            color=0x00ff00,
         )
 
         # Informations de base
@@ -509,21 +508,46 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
                 inline=True
             )
 
-        # Détection des tokens ERC20
+        # Détection et analyse des tokens ERC20
         logs = receipt.get('logs', [])
+        transfer_topic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+        swap_topic = '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822'
+        
         for log in logs:
-            if len(log['topics']) == 3 and log['topics'][0].hex() == '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef':
-                # C'est un transfert ERC20
+            # Vérifier si c'est un transfert ERC20
+            if len(log['topics']) == 3 and log['topics'][0].hex() == transfer_topic:
                 token_address = log['address']
                 token_info = await get_token_info(token_address)
+                
                 if token_info:
+                    # Décoder les données du transfert
+                    from_address = '0x' + log['topics'][1].hex()[-40:]
+                    to_address = '0x' + log['topics'][2].hex()[-40:]
                     amount = int(log['data'], 16)
                     token_amount = amount / (10 ** token_info['decimals'])
-                    embed.add_field(
-                        name=f"Token {token_info['symbol']}",
-                        value=f"```{token_amount:.4f} {token_info['symbol']}```\n*({token_info['name']})*",
-                        inline=True
-                    )
+                    
+                    # Déterminer le type de transaction
+                    is_swap = False
+                    for swap_log in logs:
+                        if len(swap_log['topics']) > 0 and swap_log['topics'][0].hex() == swap_topic:
+                            is_swap = True
+                            break
+                    
+                    # Construire le message selon le type
+                    if is_swap:
+                        action = "Acheté" if to_address.lower() == address.lower() else "Vendu"
+                        embed.add_field(
+                            name=f"Token {token_info['symbol']} ({action})",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n*{token_info['name']}*\n`{token_address}`",
+                            inline=True
+                        )
+                    else:
+                        action = "Reçu" if to_address.lower() == address.lower() else "Envoyé"
+                        embed.add_field(
+                            name=f"Token {token_info['symbol']} ({action})",
+                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n*{token_info['name']}*\n`{token_address}`",
+                            inline=True
+                        )
 
         # Adresses
         if is_outgoing:
@@ -546,10 +570,10 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
             inline=False
         )
 
-        # Hash de la transaction (en bas)
+        # Lien Basescan (en bas)
         embed.add_field(
-            name="Hash",
-            value=f"`{tx_hash}`",
+            name="🔍 Explorer",
+            value=f"[Voir la transaction sur Basescan](https://basescan.org/tx/{tx_hash})",
             inline=False
         )
 

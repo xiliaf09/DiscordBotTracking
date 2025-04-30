@@ -485,10 +485,10 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
             logger.info(f"Transaction {tx_hash} a échoué, pas de notification")
             return
 
-        # Création de l'embed
+        # Création de l'embed avec une barre verte sur le côté
         embed = discord.Embed(
             title="🔄 Nouvelle Transaction",
-            color=0x00ff00 if is_outgoing else 0x0000ff,
+            color=0x00ff00,
             timestamp=datetime.datetime.utcnow()
         )
 
@@ -500,71 +500,38 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
             inline=False
         )
 
-        # Montant ETH et destinataire/expéditeur sur la même ligne
+        # Montant ETH
         value_eth = w3.from_wei(tx['value'], 'ether')
         if value_eth > 0:
-            if is_outgoing:
-                to_short = f"{tx['to'][:6]}...{tx['to'][-4:]}"
-                embed.add_field(
-                    name="💰 Montant ETH | 👥 Destinataire",
-                    value=f"```{value_eth:.4f} ETH``` | `{to_short}`",
-                    inline=False
-                )
-            else:
-                from_short = f"{tx['from'][:6]}...{tx['from'][-4:]}"
-                embed.add_field(
-                    name="💰 Montant ETH | 👥 Expéditeur",
-                    value=f"```{value_eth:.4f} ETH``` | `{from_short}`",
-                    inline=False
-                )
+            embed.add_field(
+                name="Montant ETH",
+                value=f"{value_eth:.4f} ETH",
+                inline=False
+            )
 
-        # Détection et analyse des tokens ERC20
-        logs = receipt.get('logs', [])
-        transfer_topic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-        swap_topic = '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822'
-        
-        for log in logs:
-            # Vérifier si c'est un transfert ERC20
-            if len(log['topics']) == 3 and log['topics'][0].hex() == transfer_topic:
-                token_address = log['address']
-                token_info = await get_token_info(token_address)
-                
-                if token_info:
-                    # Décoder les données du transfert
-                    from_address = '0x' + log['topics'][1].hex()[-40:]
-                    to_address = '0x' + log['topics'][2].hex()[-40:]
-                    amount = int(log['data'], 16)
-                    token_amount = amount / (10 ** token_info['decimals'])
-                    
-                    # Déterminer le type de transaction
-                    is_swap = False
-                    for swap_log in logs:
-                        if len(swap_log['topics']) > 0 and swap_log['topics'][0].hex() == swap_topic:
-                            is_swap = True
-                            break
-                    
-                    # Construire le message selon le type
-                    if is_swap:
-                        action = "🟢 ACHAT" if to_address.lower() == address.lower() else "🔴 VENTE"
-                        embed.add_field(
-                            name=f"{action}",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**",
-                            inline=False
-                        )
-                    else:
-                        action = "📥 Reçu" if to_address.lower() == address.lower() else "📤 Envoyé"
-                        embed.add_field(
-                            name=f"{action}",
-                            value=f"```{token_amount:.4f} {token_info['symbol']}```\n**{token_info['name']}**",
-                            inline=False
-                        )
+        # Destinataire/Expéditeur
+        if is_outgoing:
+            embed.add_field(
+                name="Destinataire",
+                value=f"{tx['to']}",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Expéditeur",
+                value=f"{tx['from']}",
+                inline=False
+            )
 
-        # Lien Basescan (en bas)
+        # Lien Basescan
         embed.add_field(
             name="🔍 Explorer",
-            value=f"[Voir sur Basescan](https://basescan.org/tx/{tx_hash})",
+            value=f"[Voir la transaction sur Basescan](https://basescan.org/tx/{tx_hash})",
             inline=False
         )
+
+        # Timestamp en bas
+        embed.set_footer(text=f"Aujourd'hui à {datetime.datetime.now().strftime('%H:%M')}")
         
         # Envoi de la notification
         if address in tracking_configs and 'channel_id' in tracking_configs[address]:

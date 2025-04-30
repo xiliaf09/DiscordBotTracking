@@ -8,6 +8,7 @@ import asyncio
 from typing import Dict, List, Set
 import time
 import logging
+import datetime
 
 # Configuration du logging
 logging.basicConfig(
@@ -21,6 +22,7 @@ class DataManager:
     def __init__(self, filename='tracking_data.json'):
         self.filename = filename
         self.data = self.load_data()
+        self.processed_txs = set()  # Cache des transactions traitées
 
     def load_data(self) -> Dict:
         """Charge les données depuis le fichier JSON"""
@@ -41,6 +43,77 @@ class DataManager:
             logger.info("Données sauvegardées avec succès")
         except Exception as e:
             logger.error(f"Erreur lors de la sauvegarde des données: {str(e)}")
+
+    def is_tx_processed(self, tx_hash: str) -> bool:
+        """Vérifie si une transaction a déjà été traitée"""
+        return tx_hash in self.processed_txs
+
+    def mark_tx_processed(self, tx_hash: str):
+        """Marque une transaction comme traitée"""
+        self.processed_txs.add(tx_hash)
+
+# ABI minimal pour détecter les transferts ERC20
+ERC20_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {
+                "indexed": True,
+                "name": "from",
+                "type": "address"
+            },
+            {
+                "indexed": True,
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "indexed": False,
+                "name": "value",
+                "type": "uint256"
+            }
+        ],
+        "name": "Transfer",
+        "type": "event"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "name",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function"
+    }
+]
+
+async def get_token_info(token_address: str) -> Dict:
+    """Récupère les informations d'un token ERC20"""
+    try:
+        token_contract = w3.eth.contract(address=token_address, abi=ERC20_ABI)
+        name = await token_contract.functions.name().call()
+        symbol = await token_contract.functions.symbol().call()
+        decimals = await token_contract.functions.decimals().call()
+        return {
+            "name": name,
+            "symbol": symbol,
+            "decimals": decimals
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des infos du token {token_address}: {str(e)}")
+        return None
 
 # Initialisation du gestionnaire de données
 data_manager = DataManager()
@@ -151,29 +224,17 @@ async def monitor_addresses():
                     logger.info(f"Dernier bloc vérifié: {last_block}")
                     
                     # Vérification des transactions sortantes
-                    current_nonce = w3.eth.get_transaction_count(checksum_address)
-                    last_nonce = w3.eth.get_transaction_count(checksum_address, block_identifier=last_block)
-                    
-                    if current_nonce > last_nonce:
-                        logger.info(f"Nouvelles transactions sortantes trouvées: {current_nonce - last_nonce}")
-                        # Récupération des transactions
-                        for block in range(last_block + 1, current_block + 1):
-                            block_txs = w3.eth.get_block(block, True)['transactions']
-                            for tx in block_txs:
-                                if tx['from'].lower() == address.lower():
-                                    await process_transaction(tx['hash'].hex(), address, is_outgoing=True)
-                    
-                    # Vérification des transactions entrantes via les logs
-                    transfer_filter = w3.eth.filter({
-                        'fromBlock': last_block + 1,
-                        'toBlock': current_block,
-                        'address': None,  # Tous les contrats
-                        'topics': [None],  # Tous les événements
-                    })
-                    
-                    for event in transfer_filter.get_all_entries():
-                        if 'to' in event and event['to'].lower() == address.lower():
-                            await process_transaction(event['transactionHash'].hex(), address, is_outgoing=False)
+                    block_range = range(last_block + 1, current_block + 1)
+                    for block_num in block_range:
+                        try:
+                            block = w3.eth.get_block(block_num, True)
+                            if block and 'transactions' in block:
+                                for tx in block['transactions']:
+                                    if tx['from'].lower() == address.lower():
+                                        await process_transaction(tx['hash'].hex(), address, is_outgoing=True)
+                        except Exception as e:
+                            logger.error(f"Erreur lors de la vérification du bloc {block_num}: {str(e)}")
+                            continue
                     
                     last_checked_block[address] = current_block
                     
@@ -407,6 +468,10 @@ async def alchemy_test(ctx):
 async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = True):
     """Traite une transaction et envoie une notification Discord"""
     try:
+        # Vérifier si la transaction a déjà été traitée
+        if data_manager.is_tx_processed(tx_hash):
+            return
+
         # Récupération des détails de la transaction
         tx = w3.eth.get_transaction(tx_hash)
         receipt = w3.eth.get_transaction_receipt(tx_hash)
@@ -419,32 +484,87 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         if receipt['status'] != 1:
             logger.info(f"Transaction {tx_hash} a échoué, pas de notification")
             return
-            
-        # Calcul de la valeur en ETH
+
+        # Création de l'embed
+        embed = discord.Embed(
+            title="🔄 Nouvelle Transaction",
+            color=0x00ff00 if receipt['status'] == 1 else 0xff0000,
+            url=f"https://basescan.org/tx/{tx_hash}"
+        )
+
+        # Informations de base
+        direction = "envoyée" if is_outgoing else "reçue"
+        embed.add_field(
+            name="Type",
+            value=f"Transaction {direction} {'➡️' if is_outgoing else '⬅️'}",
+            inline=False
+        )
+
+        # Montant ETH
         value_eth = w3.from_wei(tx['value'], 'ether')
-        
-        # Construction du message
-        direction = "envoyé" if is_outgoing else "reçu"
-        message = f"💸 Transaction {direction} pour {address}\n"
-        message += f"**Montant:** {value_eth:.4f} ETH\n"
-        message += f"**Hash:** `{tx_hash}`\n"
-        message += f"**Block:** {receipt['blockNumber']}\n"
-        
+        if value_eth > 0:
+            embed.add_field(
+                name="Montant ETH",
+                value=f"```{value_eth:.4f} ETH```",
+                inline=True
+            )
+
+        # Détection des tokens ERC20
+        logs = receipt.get('logs', [])
+        for log in logs:
+            if len(log['topics']) == 3 and log['topics'][0].hex() == '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef':
+                # C'est un transfert ERC20
+                token_address = log['address']
+                token_info = await get_token_info(token_address)
+                if token_info:
+                    amount = int(log['data'], 16)
+                    token_amount = amount / (10 ** token_info['decimals'])
+                    embed.add_field(
+                        name=f"Token {token_info['symbol']}",
+                        value=f"```{token_amount:.4f} {token_info['symbol']}```\n*({token_info['name']})*",
+                        inline=True
+                    )
+
+        # Adresses
         if is_outgoing:
-            message += f"**Destinataire:** `{tx['to']}`\n"
+            embed.add_field(
+                name="Destinataire",
+                value=f"`{tx['to']}`",
+                inline=False
+            )
         else:
-            message += f"**Expéditeur:** `{tx['from']}`\n"
-            
-        # Ajout du lien Basescan
-        message += f"\n🔍 [Voir sur Basescan](https://basescan.org/tx/{tx_hash})"
+            embed.add_field(
+                name="Expéditeur",
+                value=f"`{tx['from']}`",
+                inline=False
+            )
+
+        # Informations techniques
+        embed.add_field(
+            name="Détails",
+            value=f"Block: `{receipt['blockNumber']}`\nGas utilisé: `{receipt['gasUsed']}`",
+            inline=False
+        )
+
+        # Hash de la transaction (en bas)
+        embed.add_field(
+            name="Hash",
+            value=f"`{tx_hash}`",
+            inline=False
+        )
+
+        # Timestamp
+        embed.timestamp = datetime.datetime.utcnow()
         
-        # Récupération du channel_id depuis la configuration
+        # Envoi de la notification
         if address in tracking_configs and 'channel_id' in tracking_configs[address]:
             channel_id = tracking_configs[address]['channel_id']
             channel = bot.get_channel(channel_id)
             if channel:
-                await channel.send(message)
+                await channel.send(embed=embed)
                 logger.info(f"Notification envoyée pour la transaction {tx_hash}")
+                # Marquer la transaction comme traitée
+                data_manager.mark_tx_processed(tx_hash)
             else:
                 logger.error(f"Canal Discord {channel_id} introuvable pour l'adresse {address}")
         else:

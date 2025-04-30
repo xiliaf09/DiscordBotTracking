@@ -23,6 +23,16 @@ class DataManager:
         self.filename = filename
         self.data = self.load_data()
         self.processed_txs = set()  # Cache des transactions traitées
+        self.address_to_name = {}  # Mapping adresse -> nom
+        self.name_to_address = {}  # Mapping nom -> adresse
+        self._init_mappings()
+
+    def _init_mappings(self):
+        """Initialise les mappings adresse<->nom depuis les données chargées"""
+        for address, config in self.data.items():
+            if 'name' in config:
+                self.address_to_name[address] = config['name']
+                self.name_to_address[config['name']] = address
 
     def load_data(self) -> Dict:
         """Charge les données depuis le fichier JSON"""
@@ -35,14 +45,50 @@ class DataManager:
             logger.error(f"Erreur lors du chargement des données: {str(e)}")
             return {}
 
-    def save_data(self, data: Dict):
+    def save_data(self):
         """Sauvegarde les données dans le fichier JSON"""
         try:
             with open(self.filename, 'w') as f:
-                json.dump(data, f, indent=4)
+                json.dump(self.data, f, indent=4)
             logger.info("Données sauvegardées avec succès")
         except Exception as e:
             logger.error(f"Erreur lors de la sauvegarde des données: {str(e)}")
+
+    def add_address(self, address: str, name: str, config: dict):
+        """Ajoute une nouvelle adresse avec son nom"""
+        config['name'] = name
+        self.data[address] = config
+        self.address_to_name[address] = name
+        self.name_to_address[name] = address
+        self.save_data()
+
+    def remove_address(self, identifier: str) -> bool:
+        """Supprime une adresse par son nom ou son adresse"""
+        address = None
+        name = None
+        
+        # Vérifier si l'identifiant est une adresse
+        if Web3.is_address(identifier):
+            address = Web3.to_checksum_address(identifier)
+            name = self.address_to_name.get(address)
+        else:
+            # Sinon, considérer comme un nom
+            name = identifier
+            address = self.name_to_address.get(name)
+
+        if address:
+            if address in self.data:
+                del self.data[address]
+                if name:
+                    del self.name_to_address[name]
+                    del self.address_to_name[address]
+                self.save_data()
+                return True
+        return False
+
+    def get_name(self, address: str) -> str:
+        """Récupère le nom associé à une adresse"""
+        return self.address_to_name.get(address, address[:6] + '...' + address[-4:])
 
     def is_tx_processed(self, tx_hash: str) -> bool:
         """Vérifie si une transaction a déjà été traitée"""
@@ -196,9 +242,7 @@ class TrackingConfig:
 async def on_ready():
     print(f'{bot.user} est connecté et prêt!')
     # Charger les configurations sauvegardées
-    global tracking_configs
-    tracking_configs = data_manager.load_data()
-    logger.info(f"Configurations chargées: {len(tracking_configs)} adresses")
+    logger.info(f"Configurations chargées: {len(data_manager.data)} adresses")
     # Démarrer la tâche de monitoring
     bot.loop.create_task(monitor_addresses())
 
@@ -211,7 +255,7 @@ async def monitor_addresses():
             current_block = w3.eth.block_number
             logger.info(f"\n{'='*50}\nVérification du bloc {current_block}")
             
-            for address in tracking_configs.keys():
+            for address in data_manager.data.keys():
                 try:
                     # Conversion en checksum address
                     checksum_address = Web3.to_checksum_address(address)
@@ -253,8 +297,8 @@ async def check_new_transactions(address: str, config: TrackingConfig):
     pass
 
 @bot.command(name='track')
-async def track_address(ctx, address: str, *args):
-    """Tracker une adresse avec des filtres optionnels"""
+async def track_address(ctx, address: str, name: str = None, *args):
+    """Tracker une adresse avec un nom optionnel et des filtres"""
     try:
         # Valider l'adresse
         if not w3.is_address(address):
@@ -265,8 +309,13 @@ async def track_address(ctx, address: str, *args):
         checksum_address = Web3.to_checksum_address(address)
         
         # Vérifier si l'adresse est déjà trackée
-        if checksum_address in tracking_configs:
+        if checksum_address in data_manager.data:
             await ctx.send("❌ Cette adresse est déjà trackée")
+            return
+
+        # Vérifier si le nom est déjà utilisé
+        if name and name in data_manager.name_to_address:
+            await ctx.send("❌ Ce nom est déjà utilisé")
             return
             
         # Initialiser la configuration
@@ -292,11 +341,12 @@ async def track_address(ctx, address: str, *args):
                     await ctx.send(f"❌ Montant minimum invalide: {str(e)}")
                     return
         
-        # Ajouter l'adresse à la configuration
-        tracking_configs[checksum_address] = config
+        # Si aucun nom n'est fourni, utiliser une version courte de l'adresse
+        if not name:
+            name = f"{checksum_address[:6]}...{checksum_address[-4:]}"
         
-        # Sauvegarder les configurations
-        data_manager.save_data(tracking_configs)
+        # Ajouter l'adresse avec son nom
+        data_manager.add_address(checksum_address, name, config)
         
         # Construire le message de confirmation
         filters = []
@@ -306,30 +356,20 @@ async def track_address(ctx, address: str, *args):
             filters.append(f"Min: {config['min_amount']} ETH")
             
         filter_text = " | ".join(filters) if filters else "Aucun filtre"
-        await ctx.send(f"✅ Tracking activé pour {checksum_address}\nFiltres: {filter_text}")
+        await ctx.send(f"✅ Tracking activé pour {name} ({checksum_address})\nFiltres: {filter_text}")
         
     except Exception as e:
         await ctx.send(f"❌ Erreur: {str(e)}")
         logger.error(f"Erreur lors du tracking de l'adresse {address}: {str(e)}")
 
 @bot.command(name='untrack')
-async def untrack_address(ctx, address: str):
-    """Retirer une adresse du tracking"""
+async def untrack_address(ctx, identifier: str):
+    """Retirer une adresse du tracking par son nom ou son adresse"""
     try:
-        if not w3.is_address(address):
-            await ctx.send("❌ Adresse invalide")
-            return
-
-        # Conversion en checksum address
-        checksum_address = Web3.to_checksum_address(address)
-        
-        if checksum_address in tracking_configs:
-            del tracking_configs[checksum_address]
-            # Sauvegarder les configurations
-            data_manager.save_data(tracking_configs)
-            await ctx.send(f"✅ Adresse {checksum_address} retirée du tracking")
+        if data_manager.remove_address(identifier):
+            await ctx.send(f"✅ Adresse retirée du tracking")
         else:
-            await ctx.send("❌ Cette adresse n'est pas trackée")
+            await ctx.send("❌ Cette adresse ou ce nom n'est pas tracké")
     except Exception as e:
         await ctx.send(f"❌ Erreur: {str(e)}")
 
@@ -337,13 +377,14 @@ async def untrack_address(ctx, address: str):
 async def list_addresses(ctx):
     """Lister les adresses trackées"""
     try:
-        if not tracking_configs:
+        if not data_manager.data:
             await ctx.send("❌ Aucune adresse n'est trackée")
             return
             
         embed = discord.Embed(title="📋 Adresses trackées", color=0x00ff00)
         
-        for address, config in tracking_configs.items():
+        for address, config in data_manager.data.items():
+            name = config.get('name', address[:6] + '...' + address[-4:])
             filters = []
             if config.get('token_address'):
                 filters.append(f"Token: {config['token_address']}")
@@ -352,8 +393,8 @@ async def list_addresses(ctx):
                 
             filter_text = " | ".join(filters) if filters else "Aucun filtre"
             embed.add_field(
-                name=f"🔍 {address}", 
-                value=f"Filtres: {filter_text}", 
+                name=f"🔍 {name}",
+                value=f"`{address}`\n{filter_text}",
                 inline=False
             )
             
@@ -485,9 +526,12 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
             logger.info(f"Transaction {tx_hash} a échoué, pas de notification")
             return
 
+        # Récupérer le nom de l'adresse
+        address_name = data_manager.get_name(address)
+
         # Création de l'embed avec une barre verte sur le côté
         embed = discord.Embed(
-            title="🔄 Nouvelle Transaction",
+            title=f"🔄 Nouvelle tx de {address_name}",
             color=0x00ff00,
             timestamp=datetime.datetime.utcnow()
         )
@@ -534,8 +578,8 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         embed.set_footer(text=f"Aujourd'hui à {datetime.datetime.now().strftime('%H:%M')}")
         
         # Envoi de la notification
-        if address in tracking_configs and 'channel_id' in tracking_configs[address]:
-            channel_id = tracking_configs[address]['channel_id']
+        if address in data_manager.data and 'channel_id' in data_manager.data[address]:
+            channel_id = data_manager.data[address]['channel_id']
             channel = bot.get_channel(channel_id)
             if channel:
                 await channel.send(embed=embed)

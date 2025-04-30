@@ -1,12 +1,13 @@
 from web3 import Web3
 from typing import Dict, Optional
 import json
-from eth_abi import decode_abi
+from eth_abi.codec import ABICodec
 from eth_utils import to_checksum_address
 
 class TransactionHandler:
     def __init__(self, w3: Web3):
         self.w3 = w3
+        self.abi_codec = ABICodec(w3.codec)
         self.erc20_abi = json.loads('''[
             {"constant":true,"inputs":[],"name":"name","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},
             {"constant":true,"inputs":[],"name":"symbol","outputs":[{"name":"","type":"string"}],"payable":false,"stateMutability":"view","type":"function"},

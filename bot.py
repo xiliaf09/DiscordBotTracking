@@ -17,6 +17,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class DataManager:
+    def __init__(self, filename='tracking_data.json'):
+        self.filename = filename
+        self.data = self.load_data()
+
+    def load_data(self) -> Dict:
+        """Charge les données depuis le fichier JSON"""
+        try:
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement des données: {str(e)}")
+            return {}
+
+    def save_data(self, data: Dict):
+        """Sauvegarde les données dans le fichier JSON"""
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(data, f, indent=4)
+            logger.info("Données sauvegardées avec succès")
+        except Exception as e:
+            logger.error(f"Erreur lors de la sauvegarde des données: {str(e)}")
+
+# Initialisation du gestionnaire de données
+data_manager = DataManager()
+
 # Chargement des variables d'environnement
 load_dotenv()
 
@@ -94,6 +122,10 @@ class TrackingConfig:
 @bot.event
 async def on_ready():
     print(f'{bot.user} est connecté et prêt!')
+    # Charger les configurations sauvegardées
+    global tracking_configs
+    tracking_configs = data_manager.load_data()
+    logger.info(f"Configurations chargées: {len(tracking_configs)} adresses")
     # Démarrer la tâche de monitoring
     bot.loop.create_task(monitor_addresses())
 
@@ -108,16 +140,19 @@ async def monitor_addresses():
             
             for address in tracking_configs.keys():
                 try:
+                    # Conversion en checksum address
+                    checksum_address = Web3.to_checksum_address(address)
+                    
                     if address not in last_checked_block:
                         last_checked_block[address] = current_block - 1
                     
                     last_block = last_checked_block[address]
-                    logger.info(f"\nVérification de l'adresse: {address}")
+                    logger.info(f"\nVérification de l'adresse: {checksum_address}")
                     logger.info(f"Dernier bloc vérifié: {last_block}")
                     
                     # Vérification des transactions sortantes
-                    current_nonce = w3.eth.get_transaction_count(address)
-                    last_nonce = w3.eth.get_transaction_count(address, block_identifier=last_block)
+                    current_nonce = w3.eth.get_transaction_count(checksum_address)
+                    last_nonce = w3.eth.get_transaction_count(checksum_address, block_identifier=last_block)
                     
                     if current_nonce > last_nonce:
                         logger.info(f"Nouvelles transactions sortantes trouvées: {current_nonce - last_nonce}")
@@ -157,56 +192,113 @@ async def check_new_transactions(address: str, config: TrackingConfig):
     pass
 
 @bot.command(name='track')
-async def track_address(ctx, address: str, *, filters: str = None):
-    """Ajouter une adresse à tracker"""
+async def track_address(ctx, address: str, *args):
+    """Tracker une adresse avec des filtres optionnels"""
+    try:
+        # Valider l'adresse
+        if not w3.is_address(address):
+            await ctx.send("❌ Adresse invalide")
+            return
+            
+        # Convertir en format checksum
+        checksum_address = Web3.to_checksum_address(address)
+        
+        # Vérifier si l'adresse est déjà trackée
+        if checksum_address in tracking_configs:
+            await ctx.send("❌ Cette adresse est déjà trackée")
+            return
+            
+        # Initialiser la configuration
+        config = {
+            'channel_id': ctx.channel.id  # Sauvegarder l'ID du canal
+        }
+        
+        # Parser les arguments optionnels
+        for arg in args:
+            if arg.startswith('token='):
+                token_address = arg.split('=')[1]
+                if not w3.is_address(token_address):
+                    await ctx.send(f"❌ Adresse de token invalide: {token_address}")
+                    return
+                config['token_address'] = Web3.to_checksum_address(token_address)
+            elif arg.startswith('min='):
+                try:
+                    min_amount = float(arg.split('=')[1])
+                    if min_amount <= 0:
+                        raise ValueError("Le montant minimum doit être positif")
+                    config['min_amount'] = min_amount
+                except ValueError as e:
+                    await ctx.send(f"❌ Montant minimum invalide: {str(e)}")
+                    return
+        
+        # Ajouter l'adresse à la configuration
+        tracking_configs[checksum_address] = config
+        
+        # Sauvegarder les configurations
+        data_manager.save_data(tracking_configs)
+        
+        # Construire le message de confirmation
+        filters = []
+        if config.get('token_address'):
+            filters.append(f"Token: {config['token_address']}")
+        if config.get('min_amount'):
+            filters.append(f"Min: {config['min_amount']} ETH")
+            
+        filter_text = " | ".join(filters) if filters else "Aucun filtre"
+        await ctx.send(f"✅ Tracking activé pour {checksum_address}\nFiltres: {filter_text}")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Erreur: {str(e)}")
+        logger.error(f"Erreur lors du tracking de l'adresse {address}: {str(e)}")
+
+@bot.command(name='untrack')
+async def untrack_address(ctx, address: str):
+    """Retirer une adresse du tracking"""
     try:
         if not w3.is_address(address):
             await ctx.send("❌ Adresse invalide")
             return
 
-        # Parser les filtres si fournis
-        filter_dict = {}
-        if filters:
-            try:
-                filter_dict = json.loads(filters)
-            except json.JSONDecodeError:
-                await ctx.send("❌ Format de filtres invalide")
-                return
-
-        tracking_configs[address.lower()] = TrackingConfig(
-            address=address.lower(),
-            channel_id=ctx.channel.id,
-            filters=filter_dict
-        )
+        # Conversion en checksum address
+        checksum_address = Web3.to_checksum_address(address)
         
-        await ctx.send(f"✅ Adresse {address} ajoutée au tracking")
+        if checksum_address in tracking_configs:
+            del tracking_configs[checksum_address]
+            # Sauvegarder les configurations
+            data_manager.save_data(tracking_configs)
+            await ctx.send(f"✅ Adresse {checksum_address} retirée du tracking")
+        else:
+            await ctx.send("❌ Cette adresse n'est pas trackée")
     except Exception as e:
         await ctx.send(f"❌ Erreur: {str(e)}")
 
-@bot.command(name='untrack')
-async def untrack_address(ctx, address: str):
-    """Retirer une adresse du tracking"""
-    address = address.lower()
-    if address in tracking_configs:
-        del tracking_configs[address]
-        await ctx.send(f"✅ Adresse {address} retirée du tracking")
-    else:
-        await ctx.send("❌ Adresse non trouvée dans le tracking")
-
 @bot.command(name='list')
-async def list_tracked(ctx):
-    """Lister toutes les adresses trackées"""
-    if not tracking_configs:
-        await ctx.send("Aucune adresse trackée")
-        return
-
-    message = "📋 Adresses trackées:\n"
-    for address, config in tracking_configs.items():
-        message += f"- {address}\n"
-        if config.filters:
-            message += f"  Filtres: {json.dumps(config.filters, indent=2)}\n"
-    
-    await ctx.send(message)
+async def list_addresses(ctx):
+    """Lister les adresses trackées"""
+    try:
+        if not tracking_configs:
+            await ctx.send("❌ Aucune adresse n'est trackée")
+            return
+            
+        embed = discord.Embed(title="📋 Adresses trackées", color=0x00ff00)
+        
+        for address, config in tracking_configs.items():
+            filters = []
+            if config.get('token_address'):
+                filters.append(f"Token: {config['token_address']}")
+            if config.get('min_amount'):
+                filters.append(f"Min: {config['min_amount']} ETH")
+                
+            filter_text = " | ".join(filters) if filters else "Aucun filtre"
+            embed.add_field(
+                name=f"🔍 {address}", 
+                value=f"Filtres: {filter_text}", 
+                inline=False
+            )
+            
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Erreur: {str(e)}")
 
 @bot.command(name='test')
 async def test_connection(ctx):
@@ -346,13 +438,17 @@ async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = Tr
         # Ajout du lien Basescan
         message += f"\n🔍 [Voir sur Basescan](https://basescan.org/tx/{tx_hash})"
         
-        # Envoi de la notification Discord
-        channel = client.get_channel(tracking_configs[address].channel_id)
-        if channel:
-            await channel.send(message)
-            logger.info(f"Notification envoyée pour la transaction {tx_hash}")
+        # Récupération du channel_id depuis la configuration
+        if address in tracking_configs and 'channel_id' in tracking_configs[address]:
+            channel_id = tracking_configs[address]['channel_id']
+            channel = bot.get_channel(channel_id)
+            if channel:
+                await channel.send(message)
+                logger.info(f"Notification envoyée pour la transaction {tx_hash}")
+            else:
+                logger.error(f"Canal Discord {channel_id} introuvable pour l'adresse {address}")
         else:
-            logger.error(f"Canal Discord introuvable pour l'adresse {address}")
+            logger.error(f"Configuration de canal manquante pour l'adresse {address}")
             
     except Exception as e:
         logger.error(f"Erreur lors du traitement de la transaction {tx_hash}: {str(e)}")

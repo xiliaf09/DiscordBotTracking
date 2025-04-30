@@ -249,9 +249,21 @@ async def on_ready():
 async def monitor_addresses():
     """Surveille les transactions pour les adresses trackées"""
     last_checked_block = {}
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    base_sleep_time = 12
     
     while True:
         try:
+            # Vérifier la connexion Web3
+            if not w3.is_connected():
+                logger.error("Connexion Web3 perdue, tentative de reconnexion...")
+                global w3
+                w3 = setup_web3_connection()
+                if not w3.is_connected():
+                    await asyncio.sleep(30)
+                    continue
+
             current_block = w3.eth.block_number
             logger.info(f"\n{'='*50}\nVérification du bloc {current_block}")
             
@@ -267,9 +279,12 @@ async def monitor_addresses():
                     logger.info(f"\nVérification de l'adresse: {checksum_address}")
                     logger.info(f"Dernier bloc vérifié: {last_block}")
                     
+                    # Limiter le nombre de blocs à vérifier pour éviter les timeouts
+                    max_blocks_to_check = 10
+                    start_block = max(last_block + 1, current_block - max_blocks_to_check)
+                    
                     # Vérification des transactions
-                    block_range = range(last_block + 1, current_block + 1)
-                    for block_num in block_range:
+                    for block_num in range(start_block, current_block + 1):
                         try:
                             block = w3.eth.get_block(block_num, True)
                             if block and 'transactions' in block:
@@ -312,11 +327,25 @@ async def monitor_addresses():
                     logger.error(f"Erreur lors de la vérification de l'adresse {address}: {str(e)}")
                     continue
             
-            await asyncio.sleep(12)  # Attente entre les vérifications
+            # Réinitialiser le compteur d'erreurs si tout s'est bien passé
+            consecutive_errors = 0
+            # Ajuster le délai en fonction de la charge
+            sleep_time = base_sleep_time
+            if len(data_manager.data) > 5:
+                sleep_time = base_sleep_time * 1.5
+            
+            await asyncio.sleep(sleep_time)
             
         except Exception as e:
             logger.error(f"Erreur dans la boucle de monitoring: {str(e)}")
-            await asyncio.sleep(30)  # Attente plus longue en cas d'erreur
+            consecutive_errors += 1
+            
+            # Augmenter le délai d'attente en cas d'erreurs consécutives
+            if consecutive_errors >= max_consecutive_errors:
+                logger.warning(f"Trop d'erreurs consécutives ({consecutive_errors}), augmentation du délai d'attente...")
+                await asyncio.sleep(60)  # Attente plus longue
+            else:
+                await asyncio.sleep(base_sleep_time * 2)  # Double le délai normal
 
 async def check_new_transactions(address: str, config: TrackingConfig):
     # Logique pour vérifier les nouvelles transactions

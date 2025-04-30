@@ -76,10 +76,12 @@ async def monitor_addresses():
                 continue
 
             current_block = w3.eth.block_number
-            print(f"Vérification des transactions - Bloc actuel: {current_block}")
+            print(f"\n=== Vérification des transactions - Bloc actuel: {current_block} ===")
             
             for address, config in tracking_configs.items():
-                print(f"Vérification de l'adresse {address} (dernier bloc vérifié: {config.last_block})")
+                print(f"\nVérification de l'adresse {address}")
+                print(f"Dernier bloc vérifié: {config.last_block}")
+                
                 if current_block > config.last_block:
                     # Récupérer les transactions pour cette plage de blocs
                     from_block = config.last_block + 1
@@ -99,7 +101,7 @@ async def monitor_addresses():
                     print(f"Total des transactions à traiter: {len(all_txs)}")
                     
                     for tx_hash in set(all_txs):  # Utiliser un set pour éviter les doublons
-                        print(f"Traitement de la transaction: {tx_hash}")
+                        print(f"\nTraitement de la transaction: {tx_hash}")
                         tx_info = await tx_handler.process_transaction(tx_hash, config)
                         if tx_info:
                             print(f"Envoi de la notification pour la transaction {tx_hash} dans le channel {config.channel_id}")
@@ -121,32 +123,24 @@ async def get_transactions_for_address(address: str, from_block: int, to_block: 
     """Récupère les transactions pour une adresse dans une direction donnée"""
     try:
         print(f"Recherche des transactions {direction} pour l'adresse {address}")
-        # Construire le filtre en fonction de la direction
-        if direction == 'from':
-            transactions = w3.eth.get_transaction_count(address, to_block) - w3.eth.get_transaction_count(address, from_block - 1)
-            print(f"Nombre de transactions envoyées trouvées: {transactions}")
-            if transactions > 0:
-                block_transactions = []
-                for block_num in range(from_block, to_block + 1):
-                    print(f"Analyse du bloc {block_num}")
-                    block = w3.eth.get_block(block_num, full_transactions=True)
-                    for tx in block.transactions:
-                        if isinstance(tx, dict) and tx['from'].lower() == address.lower():
-                            block_transactions.append(tx['hash'].hex())
-                            print(f"Transaction trouvée: {tx['hash'].hex()}")
-                return block_transactions
-        else:  # direction == 'to'
-            block_transactions = []
-            for block_num in range(from_block, to_block + 1):
-                print(f"Analyse du bloc {block_num}")
-                block = w3.eth.get_block(block_num, full_transactions=True)
-                for tx in block.transactions:
-                    if isinstance(tx, dict) and tx.get('to', '').lower() == address.lower():
-                        block_transactions.append(tx['hash'].hex())
-                        print(f"Transaction trouvée: {tx['hash'].hex()}")
-            return block_transactions
+        block_transactions = []
         
-        return []
+        for block_num in range(from_block, to_block + 1):
+            print(f"Analyse du bloc {block_num}")
+            block = w3.eth.get_block(block_num, full_transactions=True)
+            
+            for tx in block.transactions:
+                if isinstance(tx, dict):
+                    if direction == 'from' and tx['from'].lower() == address.lower():
+                        block_transactions.append(tx['hash'].hex())
+                        print(f"Transaction envoyée trouvée: {tx['hash'].hex()}")
+                    elif direction == 'to' and tx.get('to', '').lower() == address.lower():
+                        block_transactions.append(tx['hash'].hex())
+                        print(f"Transaction reçue trouvée: {tx['hash'].hex()}")
+        
+        print(f"Nombre total de transactions {direction} trouvées: {len(block_transactions)}")
+        return block_transactions
+        
     except Exception as e:
         print(f"Erreur lors de la récupération des transactions ({direction}): {str(e)}")
         return []

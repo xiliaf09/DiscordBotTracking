@@ -17,48 +17,67 @@ class TransactionHandler:
     async def process_transaction(self, tx_hash: str, config: Dict) -> Optional[Dict]:
         """Traite une transaction et retourne les informations pertinentes"""
         try:
-            print(f"Traitement de la transaction {tx_hash}")
+            print(f"\nTraitement détaillé de la transaction {tx_hash}")
+            
+            # Récupérer la transaction
             tx = self.w3.eth.get_transaction(tx_hash)
-            print(f"Transaction récupérée: {json.dumps(tx, indent=2)}")
-            
-            tx_receipt = self.w3.eth.get_transaction_receipt(tx_hash)
-            print(f"Reçu de transaction: {json.dumps(tx_receipt, indent=2)}")
-            
-            # Vérifier si la transaction correspond aux filtres
-            print(f"Vérification des filtres: {config.get('filters', {})}")
-            if not self._matches_filters(tx, tx_receipt, config.get('filters', {})):
-                print("Transaction ne correspond pas aux filtres")
+            if not tx:
+                print(f"Transaction {tx_hash} non trouvée")
                 return None
-
-            # Analyser le type de transaction
-            tx_type = self._determine_transaction_type(tx, tx_receipt)
-            print(f"Type de transaction détecté: {tx_type}")
             
-            # Construire le message de notification
-            notification = {
-                'type': tx_type,
-                'hash': tx_hash,
+            # Récupérer le reçu de la transaction
+            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            if not receipt:
+                print(f"Reçu de transaction {tx_hash} non trouvé")
+                return None
+            
+            # Vérifier si la transaction est réussie
+            if not receipt['status']:
+                print(f"Transaction {tx_hash} a échoué")
+                return None
+            
+            # Vérifier les filtres
+            if config.token_address:
+                # Vérifier si c'est un transfert de token
+                if not receipt.get('logs'):
+                    print(f"Pas de logs pour la transaction {tx_hash}")
+                    return None
+                
+                token_transfer = False
+                for log in receipt['logs']:
+                    if log['address'].lower() == config.token_address.lower():
+                        token_transfer = True
+                        break
+                
+                if not token_transfer:
+                    print(f"Transaction {tx_hash} ne concerne pas le token {config.token_address}")
+                    return None
+            
+            if config.min_amount:
+                # Vérifier le montant minimum
+                value_wei = int(tx['value'])
+                if value_wei < config.min_amount:
+                    print(f"Montant {value_wei} inférieur au minimum requis {config.min_amount}")
+                    return None
+            
+            # Construire l'objet d'information
+            tx_info = {
+                'hash': tx_hash.hex(),
                 'from': tx['from'],
                 'to': tx['to'],
-                'value': self.w3.from_wei(tx['value'], 'ether'),
-                'block': tx_receipt['blockNumber'],
-                'timestamp': self.w3.eth.get_block(tx_receipt['blockNumber'])['timestamp'],
-                'gas_used': tx_receipt['gasUsed'],
-                'status': 'success' if tx_receipt['status'] == 1 else 'failed'
+                'value': self.w3.from_wei(int(tx['value']), 'ether'),
+                'block_number': receipt['blockNumber'],
+                'timestamp': self.w3.eth.get_block(receipt['blockNumber'])['timestamp'],
+                'gas_used': receipt['gasUsed'],
+                'gas_price': self.w3.from_wei(int(tx['gasPrice']), 'gwei'),
+                'status': 'success'
             }
-            print(f"Notification préparée: {json.dumps(notification, indent=2)}")
-
-            # Ajouter des informations spécifiques selon le type de transaction
-            if tx_type == 'token_transfer':
-                print("Récupération des informations du token")
-                token_info = await self._get_token_info(tx['to'])
-                notification.update(token_info)
-                print(f"Informations du token ajoutées: {json.dumps(token_info, indent=2)}")
             
-            return notification
+            print(f"Transaction {tx_hash} traitée avec succès")
+            return tx_info
 
         except Exception as e:
-            print(f"Erreur lors du traitement de la transaction {tx_hash}: {e}")
+            print(f"Erreur lors du traitement de la transaction {tx_hash}: {str(e)}")
             return None
 
     def _matches_filters(self, tx: Dict, receipt: Dict, filters: Dict) -> bool:

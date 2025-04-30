@@ -18,23 +18,34 @@ ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
 
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN n'est pas défini dans les variables d'environnement")
-if not ALCHEMY_API_KEY:
-    raise ValueError("ALCHEMY_API_KEY n'est pas défini dans les variables d'environnement")
 
 # Configuration du bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Configuration Web3 avec Alchemy
-ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
-
-# Vérification de la connexion
-if not w3.is_connected():
-    raise Exception("Impossible de se connecter à Alchemy")
+# Configuration Web3
+if ALCHEMY_API_KEY:
+    # Essayer d'abord Alchemy
+    ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+    w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
+    print(f"Tentative de connexion à Alchemy...")
+    
+    if w3.is_connected():
+        print(f"Connecté à Alchemy avec succès! Version de l'API: {w3.api}")
+    else:
+        print("Impossible de se connecter à Alchemy, utilisation du RPC public...")
+        # Fallback sur le RPC public
+        w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
 else:
-    print("Connecté à Alchemy avec succès!")
+    print("Pas de clé Alchemy configurée, utilisation du RPC public...")
+    w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+
+# Vérification finale de la connexion
+if not w3.is_connected():
+    raise Exception("Impossible de se connecter à un nœud Base")
+else:
+    print(f"Connecté au réseau Base! Dernier bloc: {w3.eth.block_number}")
 
 # Initialisation des handlers
 tx_handler = TransactionHandler(w3)

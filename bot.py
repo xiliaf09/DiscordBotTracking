@@ -226,9 +226,9 @@ async def test_connection(ctx):
         # Test de récupération d'une transaction récente
         try:
             block = w3.eth.get_block('latest', full_transactions=True)
-            if block and block.transactions:
-                tx = block.transactions[0]
-                tx_hash = tx['hash'].hex() if isinstance(tx, dict) else tx.hex()
+            if block and len(block['transactions']) > 0:
+                tx = block['transactions'][0]
+                tx_hash = tx.hex() if isinstance(tx, (bytes, bytearray)) else tx
                 tx_msg = f"📝 Dernière transaction: {tx_hash}"
             else:
                 tx_msg = "❌ Aucune transaction trouvée"
@@ -237,8 +237,9 @@ async def test_connection(ctx):
             
         # Test de l'API Alchemy
         try:
-            if ALCHEMY_API_KEY:
-                alchemy_url = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+            alchemy_api_key = os.getenv('ALCHEMY_API_KEY')
+            if alchemy_api_key:
+                alchemy_url = f"https://base-mainnet.g.alchemy.com/v2/{alchemy_api_key}"
                 alchemy_w3 = Web3(Web3.HTTPProvider(alchemy_url))
                 is_alchemy_connected = alchemy_w3.is_connected()
                 alchemy_msg = f"🔌 Connexion Alchemy: {'✅' if is_alchemy_connected else '❌'}"

@@ -8,6 +8,7 @@ import asyncio
 from typing import Dict, List, Set
 from transaction_handler import TransactionHandler
 from notification_handler import NotificationHandler
+from eth_utils import to_checksum_address
 
 # Chargement des variables d'environnement
 load_dotenv()
@@ -55,7 +56,7 @@ tracking_configs: Dict[str, Dict] = {}
 
 class TrackingConfig:
     def __init__(self, address: str, channel_id: int, filters: Dict = None):
-        self.address = address.lower()
+        self.address = to_checksum_address(address.lower())
         self.channel_id = channel_id
         self.filters = filters or {}
         self.last_block = w3.eth.block_number
@@ -70,31 +71,45 @@ async def monitor_addresses():
     while True:
         try:
             if not tracking_configs:
+                print("Aucune adresse à tracker, attente...")
                 await asyncio.sleep(5)
                 continue
 
             current_block = w3.eth.block_number
+            print(f"Vérification des transactions - Bloc actuel: {current_block}")
             
             for address, config in tracking_configs.items():
+                print(f"Vérification de l'adresse {address} (dernier bloc vérifié: {config.last_block})")
                 if current_block > config.last_block:
                     # Récupérer les transactions pour cette plage de blocs
                     from_block = config.last_block + 1
                     to_block = current_block
+                    print(f"Recherche des transactions entre les blocs {from_block} et {to_block}")
 
                     # Vérifier les transactions envoyées
                     sent_txs = await get_transactions_for_address(address, from_block, to_block, 'from')
+                    print(f"Transactions envoyées trouvées: {len(sent_txs)}")
                     
                     # Vérifier les transactions reçues
                     received_txs = await get_transactions_for_address(address, from_block, to_block, 'to')
+                    print(f"Transactions reçues trouvées: {len(received_txs)}")
                     
                     # Traiter toutes les transactions
                     all_txs = sent_txs + received_txs
+                    print(f"Total des transactions à traiter: {len(all_txs)}")
+                    
                     for tx_hash in set(all_txs):  # Utiliser un set pour éviter les doublons
+                        print(f"Traitement de la transaction: {tx_hash}")
                         tx_info = await tx_handler.process_transaction(tx_hash, config)
                         if tx_info:
+                            print(f"Envoi de la notification pour la transaction {tx_hash} dans le channel {config.channel_id}")
                             await notif_handler.send_notification(config.channel_id, tx_info)
+                        else:
+                            print(f"Aucune information à notifier pour la transaction {tx_hash}")
                     
                     config.last_block = current_block
+                else:
+                    print(f"Pas de nouveaux blocs pour l'adresse {address}")
 
             await asyncio.sleep(1)  # Attendre 1 seconde entre chaque vérification
             
@@ -105,24 +120,30 @@ async def monitor_addresses():
 async def get_transactions_for_address(address: str, from_block: int, to_block: int, direction: str) -> List[str]:
     """Récupère les transactions pour une adresse dans une direction donnée"""
     try:
+        print(f"Recherche des transactions {direction} pour l'adresse {address}")
         # Construire le filtre en fonction de la direction
         if direction == 'from':
             transactions = w3.eth.get_transaction_count(address, to_block) - w3.eth.get_transaction_count(address, from_block - 1)
+            print(f"Nombre de transactions envoyées trouvées: {transactions}")
             if transactions > 0:
                 block_transactions = []
                 for block_num in range(from_block, to_block + 1):
+                    print(f"Analyse du bloc {block_num}")
                     block = w3.eth.get_block(block_num, full_transactions=True)
                     for tx in block.transactions:
                         if isinstance(tx, dict) and tx['from'].lower() == address.lower():
                             block_transactions.append(tx['hash'].hex())
+                            print(f"Transaction trouvée: {tx['hash'].hex()}")
                 return block_transactions
         else:  # direction == 'to'
             block_transactions = []
             for block_num in range(from_block, to_block + 1):
+                print(f"Analyse du bloc {block_num}")
                 block = w3.eth.get_block(block_num, full_transactions=True)
                 for tx in block.transactions:
                     if isinstance(tx, dict) and tx.get('to', '').lower() == address.lower():
                         block_transactions.append(tx['hash'].hex())
+                        print(f"Transaction trouvée: {tx['hash'].hex()}")
             return block_transactions
         
         return []
@@ -138,34 +159,43 @@ async def track_address(ctx, address: str, *, filters: str = None):
             await ctx.send("❌ Adresse invalide")
             return
 
+        # Convertir l'adresse en format checksum
+        checksum_address = to_checksum_address(address.lower())
+        
         # Parser les filtres si fournis
         filter_dict = {}
         if filters:
             try:
                 filter_dict = json.loads(filters)
+                # Convertir les adresses de token en format checksum si présentes
+                if 'token_address' in filter_dict:
+                    filter_dict['token_address'] = to_checksum_address(filter_dict['token_address'].lower())
             except json.JSONDecodeError:
                 await ctx.send("❌ Format de filtres invalide")
                 return
 
-        tracking_configs[address.lower()] = TrackingConfig(
-            address=address.lower(),
+        tracking_configs[checksum_address] = TrackingConfig(
+            address=checksum_address,
             channel_id=ctx.channel.id,
             filters=filter_dict
         )
         
-        await ctx.send(f"✅ Adresse {address} ajoutée au tracking")
+        await ctx.send(f"✅ Adresse {checksum_address} ajoutée au tracking")
     except Exception as e:
         await ctx.send(f"❌ Erreur: {str(e)}")
 
 @bot.command(name='untrack')
 async def untrack_address(ctx, address: str):
     """Retirer une adresse du tracking"""
-    address = address.lower()
-    if address in tracking_configs:
-        del tracking_configs[address]
-        await ctx.send(f"✅ Adresse {address} retirée du tracking")
-    else:
-        await ctx.send("❌ Adresse non trouvée dans le tracking")
+    try:
+        checksum_address = to_checksum_address(address.lower())
+        if checksum_address in tracking_configs:
+            del tracking_configs[checksum_address]
+            await ctx.send(f"✅ Adresse {checksum_address} retirée du tracking")
+        else:
+            await ctx.send("❌ Adresse non trouvée dans le tracking")
+    except Exception as e:
+        await ctx.send(f"❌ Erreur: {str(e)}")
 
 @bot.command(name='list')
 async def list_tracked(ctx):

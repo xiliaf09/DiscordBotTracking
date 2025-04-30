@@ -267,15 +267,20 @@ async def monitor_addresses():
                     logger.info(f"\nVérification de l'adresse: {checksum_address}")
                     logger.info(f"Dernier bloc vérifié: {last_block}")
                     
-                    # Vérification des transactions sortantes
+                    # Vérification des transactions
                     block_range = range(last_block + 1, current_block + 1)
                     for block_num in block_range:
                         try:
                             block = w3.eth.get_block(block_num, True)
                             if block and 'transactions' in block:
                                 for tx in block['transactions']:
+                                    # Vérifier les transactions sortantes
                                     if tx['from'].lower() == address.lower():
                                         await process_transaction(tx['hash'].hex(), address, is_outgoing=True)
+                                    # Vérifier les transactions entrantes
+                                    elif tx['to'] and tx['to'].lower() == address.lower():
+                                        await process_transaction(tx['hash'].hex(), address, is_outgoing=False)
+                                        
                         except Exception as e:
                             logger.error(f"Erreur lors de la vérification du bloc {block_num}: {str(e)}")
                             continue

@@ -16,7 +16,42 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration Web3
-w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+if ALCHEMY_API_KEY:
+    # Configuration Alchemy avec les bons headers
+    ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    provider = Web3.HTTPProvider(
+        ALCHEMY_URL,
+        request_kwargs={
+            'headers': headers,
+            'timeout': 30
+        }
+    )
+    w3 = Web3(provider)
+    print(f"Tentative de connexion à Alchemy...")
+    
+    if w3.is_connected():
+        print(f"Connecté à Alchemy avec succès! Version de l'API: {w3.api}")
+    else:
+        print("Impossible de se connecter à Alchemy, utilisation du RPC public...")
+        w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+else:
+    print("Pas de clé Alchemy configurée, utilisation du RPC public...")
+    w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+
+# Vérification finale de la connexion
+if not w3.is_connected():
+    raise Exception("Impossible de se connecter à un nœud Base")
+else:
+    print(f"Connecté au réseau Base! Dernier bloc: {w3.eth.block_number}")
+
+# Activer le middleware pour gérer les requêtes asynchrones
+from web3.middleware import geth_poa_middleware
+w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
 # Structure de données pour stocker les configurations de tracking
 tracking_configs: Dict[str, Dict] = {}

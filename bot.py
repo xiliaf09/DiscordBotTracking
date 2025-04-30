@@ -226,27 +226,40 @@ async def test_connection(ctx):
         # Test de récupération d'une transaction récente
         try:
             block = w3.eth.get_block('latest', full_transactions=True)
-            if block and len(block['transactions']) > 0:
+            if block and block.get('transactions', []):
                 tx = block['transactions'][0]
-                tx_hash = tx.hex() if isinstance(tx, (bytes, bytearray)) else tx
-                tx_msg = f"📝 Dernière transaction: {tx_hash}"
+                # Formatage simplifié de la transaction
+                if isinstance(tx, (bytes, bytearray)):
+                    tx_hash = tx.hex()
+                elif isinstance(tx, str):
+                    tx_hash = tx
+                elif isinstance(tx, dict):
+                    tx_hash = tx.get('hash', '').hex() if isinstance(tx.get('hash'), (bytes, bytearray)) else str(tx.get('hash', ''))
+                else:
+                    tx_hash = str(tx)
+                
+                # Tronquer le hash pour l'affichage
+                short_hash = f"{tx_hash[:10]}...{tx_hash[-8:]}" if len(tx_hash) > 20 else tx_hash
+                tx_msg = f"📝 Dernière transaction: `{short_hash}`"
             else:
-                tx_msg = "❌ Aucune transaction trouvée"
+                tx_msg = "❌ Aucune transaction trouvée dans le dernier bloc"
         except Exception as e:
-            tx_msg = f"❌ Erreur transaction: {str(e)}"
+            logger.error(f"Erreur lors de la récupération de la transaction: {str(e)}")
+            tx_msg = "❌ Erreur lors de la récupération de la transaction"
             
         # Test de l'API Alchemy
-        try:
-            alchemy_api_key = os.getenv('ALCHEMY_API_KEY')
-            if alchemy_api_key:
+        alchemy_api_key = os.getenv('ALCHEMY_API_KEY')
+        if alchemy_api_key:
+            try:
                 alchemy_url = f"https://base-mainnet.g.alchemy.com/v2/{alchemy_api_key}"
                 alchemy_w3 = Web3(Web3.HTTPProvider(alchemy_url))
                 is_alchemy_connected = alchemy_w3.is_connected()
                 alchemy_msg = f"🔌 Connexion Alchemy: {'✅' if is_alchemy_connected else '❌'}"
-            else:
-                alchemy_msg = "⚠️ Pas de clé Alchemy configurée"
-        except Exception as e:
-            alchemy_msg = f"❌ Erreur Alchemy: {str(e)}"
+            except Exception as e:
+                logger.error(f"Erreur Alchemy: {str(e)}")
+                alchemy_msg = "❌ Erreur de connexion Alchemy"
+        else:
+            alchemy_msg = "⚠️ Pas de clé Alchemy configurée dans les variables d'environnement"
         
         # Envoyer le rapport
         status_report = f"""
@@ -256,12 +269,14 @@ async def test_connection(ctx):
 {tx_msg}
 {alchemy_msg}
 
-**Provider URL**: {w3.provider.endpoint_uri}
+**Provider URL**: `{w3.provider.endpoint_uri}`
 """
         await ctx.send(status_report)
         
     except Exception as e:
-        await ctx.send(f"❌ Erreur lors du test: {str(e)}")
+        error_msg = f"❌ Erreur lors du test: {str(e)}"
+        logger.error(error_msg)
+        await ctx.send(error_msg)
 
 async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = True):
     """Traite une transaction et envoie une notification Discord"""

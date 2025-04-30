@@ -36,33 +36,9 @@ class TransactionHandler:
                 print(f"Transaction {tx_hash} a échoué")
                 return None
             
-            # Vérifier les filtres
-            if config.token_address:
-                # Vérifier si c'est un transfert de token
-                if not receipt.get('logs'):
-                    print(f"Pas de logs pour la transaction {tx_hash}")
-                    return None
-                
-                token_transfer = False
-                for log in receipt['logs']:
-                    if log['address'].lower() == config.token_address.lower():
-                        token_transfer = True
-                        break
-                
-                if not token_transfer:
-                    print(f"Transaction {tx_hash} ne concerne pas le token {config.token_address}")
-                    return None
-            
-            if config.min_amount:
-                # Vérifier le montant minimum
-                value_wei = int(tx['value'])
-                if value_wei < config.min_amount:
-                    print(f"Montant {value_wei} inférieur au minimum requis {config.min_amount}")
-                    return None
-            
-            # Construire l'objet d'information
+            # Initialiser les informations de base
             tx_info = {
-                'hash': tx_hash.hex(),
+                'hash': tx_hash,
                 'from': tx['from'],
                 'to': tx['to'],
                 'value': self.w3.from_wei(int(tx['value']), 'ether'),
@@ -70,8 +46,44 @@ class TransactionHandler:
                 'timestamp': self.w3.eth.get_block(receipt['blockNumber'])['timestamp'],
                 'gas_used': receipt['gasUsed'],
                 'gas_price': self.w3.from_wei(int(tx['gasPrice']), 'gwei'),
-                'status': 'success'
+                'status': 'success',
+                'token_transfers': []
             }
+            
+            # Analyser les logs pour les transferts de tokens
+            if receipt.get('logs'):
+                for log in receipt['logs']:
+                    if len(log['topics']) >= 3 and log['topics'][0].hex() == '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef':
+                        # Décoder les adresses from/to depuis les topics
+                        from_addr = '0x' + log['topics'][1].hex()[-40:]
+                        to_addr = '0x' + log['topics'][2].hex()[-40:]
+                        token_contract = log['address']
+                        
+                        # Décoder la valeur du transfert
+                        value = int(log['data'], 16)
+                        
+                        # Récupérer les informations du token
+                        try:
+                            token_info = await self._get_token_info(token_contract)
+                            decimals = token_info.get('token_decimals', 18)
+                            token_value = value / (10 ** decimals)
+                            
+                            transfer_info = {
+                                'token_address': token_contract,
+                                'token_name': token_info.get('token_name', 'Unknown Token'),
+                                'token_symbol': token_info.get('token_symbol', '???'),
+                                'from': from_addr,
+                                'to': to_addr,
+                                'value': token_value,
+                                'raw_value': value
+                            }
+                            
+                            tx_info['token_transfers'].append(transfer_info)
+                            print(f"Transfert de token détecté: {transfer_info['token_symbol']} - {transfer_info['value']}")
+                            
+                        except Exception as e:
+                            print(f"Erreur lors de la récupération des informations du token {token_contract}: {str(e)}")
+                            continue
             
             print(f"Transaction {tx_hash} traitée avec succès")
             return tx_info

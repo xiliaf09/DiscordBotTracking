@@ -6,6 +6,16 @@ from web3 import Web3
 import json
 import asyncio
 from typing import Dict, List, Set
+import time
+import logging
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # Chargement des variables d'environnement
 load_dotenv()
@@ -15,39 +25,57 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Configuration Web3
-ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
-if ALCHEMY_API_KEY:
-    # Configuration Alchemy avec les bons headers
-    ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    provider = Web3.HTTPProvider(
-        ALCHEMY_URL,
-        request_kwargs={
-            'headers': headers,
-            'timeout': 30
-        }
-    )
-    w3 = Web3(provider)
-    print(f"Tentative de connexion à Alchemy...")
+def setup_web3_connection(max_retries=3, retry_delay=5):
+    """Configure la connexion Web3 avec retry pour Alchemy"""
+    ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
     
-    if w3.is_connected():
-        print(f"Connecté à Alchemy avec succès! Version de l'API: {w3.api}")
-    else:
-        print("Impossible de se connecter à Alchemy, utilisation du RPC public...")
-        w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
-else:
-    print("Pas de clé Alchemy configurée, utilisation du RPC public...")
-    w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+    if not ALCHEMY_API_KEY:
+        logger.warning("Pas de clé Alchemy configurée, utilisation du RPC public...")
+        return Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Tentative de connexion à Alchemy (essai {attempt + 1}/{max_retries})...")
+            
+            ALCHEMY_URL = f"https://base-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            }
+            provider = Web3.HTTPProvider(
+                ALCHEMY_URL,
+                request_kwargs={
+                    'headers': headers,
+                    'timeout': 30
+                }
+            )
+            w3 = Web3(provider)
+            
+            if w3.is_connected():
+                # Test supplémentaire pour vérifier la connexion
+                block = w3.eth.block_number
+                logger.info(f"Connecté à Alchemy avec succès! Version de l'API: {w3.api}")
+                logger.info(f"Dernier bloc: {block}")
+                return w3
+            
+            logger.warning(f"Échec de la connexion à Alchemy (tentative {attempt + 1})")
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la connexion à Alchemy: {str(e)}")
+        
+        if attempt < max_retries - 1:
+            logger.info(f"Nouvelle tentative dans {retry_delay} secondes...")
+            time.sleep(retry_delay)
+    
+    logger.warning("Impossible de se connecter à Alchemy après plusieurs tentatives, utilisation du RPC public...")
+    return Web3(Web3.HTTPProvider('https://mainnet.base.org'))
+
+# Configuration Web3
+w3 = setup_web3_connection()
 
 # Vérification finale de la connexion
 if not w3.is_connected():
     raise Exception("Impossible de se connecter à un nœud Base")
-else:
-    print(f"Connecté au réseau Base! Dernier bloc: {w3.eth.block_number}")
 
 # Activer le middleware pour gérer les requêtes asynchrones
 from web3.middleware import geth_poa_middleware
@@ -70,18 +98,59 @@ async def on_ready():
     bot.loop.create_task(monitor_addresses())
 
 async def monitor_addresses():
+    """Surveille les transactions pour les adresses trackées"""
+    last_checked_block = {}
+    
     while True:
         try:
             current_block = w3.eth.block_number
-            for address, config in tracking_configs.items():
-                if current_block > config.last_block:
-                    # Vérifier les nouvelles transactions
-                    await check_new_transactions(address, config)
-                    config.last_block = current_block
-            await asyncio.sleep(1)  # Attendre 1 seconde entre chaque vérification
+            logger.info(f"\n{'='*50}\nVérification du bloc {current_block}")
+            
+            for address in tracking_configs.keys():
+                try:
+                    if address not in last_checked_block:
+                        last_checked_block[address] = current_block - 1
+                    
+                    last_block = last_checked_block[address]
+                    logger.info(f"\nVérification de l'adresse: {address}")
+                    logger.info(f"Dernier bloc vérifié: {last_block}")
+                    
+                    # Vérification des transactions sortantes
+                    current_nonce = w3.eth.get_transaction_count(address)
+                    last_nonce = w3.eth.get_transaction_count(address, block_identifier=last_block)
+                    
+                    if current_nonce > last_nonce:
+                        logger.info(f"Nouvelles transactions sortantes trouvées: {current_nonce - last_nonce}")
+                        # Récupération des transactions
+                        for block in range(last_block + 1, current_block + 1):
+                            block_txs = w3.eth.get_block(block, True)['transactions']
+                            for tx in block_txs:
+                                if tx['from'].lower() == address.lower():
+                                    await process_transaction(tx['hash'].hex(), address, is_outgoing=True)
+                    
+                    # Vérification des transactions entrantes via les logs
+                    transfer_filter = w3.eth.filter({
+                        'fromBlock': last_block + 1,
+                        'toBlock': current_block,
+                        'address': None,  # Tous les contrats
+                        'topics': [None],  # Tous les événements
+                    })
+                    
+                    for event in transfer_filter.get_all_entries():
+                        if 'to' in event and event['to'].lower() == address.lower():
+                            await process_transaction(event['transactionHash'].hex(), address, is_outgoing=False)
+                    
+                    last_checked_block[address] = current_block
+                    
+                except Exception as e:
+                    logger.error(f"Erreur lors de la vérification de l'adresse {address}: {str(e)}")
+                    continue
+            
+            await asyncio.sleep(12)  # Attente entre les vérifications
+            
         except Exception as e:
-            print(f"Erreur lors du monitoring: {e}")
-            await asyncio.sleep(5)
+            logger.error(f"Erreur dans la boucle de monitoring: {str(e)}")
+            await asyncio.sleep(30)  # Attente plus longue en cas d'erreur
 
 async def check_new_transactions(address: str, config: TrackingConfig):
     # Logique pour vérifier les nouvelles transactions
@@ -192,6 +261,51 @@ async def test_connection(ctx):
         
     except Exception as e:
         await ctx.send(f"❌ Erreur lors du test: {str(e)}")
+
+async def process_transaction(tx_hash: str, address: str, is_outgoing: bool = True):
+    """Traite une transaction et envoie une notification Discord"""
+    try:
+        # Récupération des détails de la transaction
+        tx = w3.eth.get_transaction(tx_hash)
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+        
+        if not tx or not receipt:
+            logger.warning(f"Transaction {tx_hash} introuvable")
+            return
+            
+        # Vérification du statut
+        if receipt['status'] != 1:
+            logger.info(f"Transaction {tx_hash} a échoué, pas de notification")
+            return
+            
+        # Calcul de la valeur en ETH
+        value_eth = w3.from_wei(tx['value'], 'ether')
+        
+        # Construction du message
+        direction = "envoyé" if is_outgoing else "reçu"
+        message = f"💸 Transaction {direction} pour {address}\n"
+        message += f"**Montant:** {value_eth:.4f} ETH\n"
+        message += f"**Hash:** `{tx_hash}`\n"
+        message += f"**Block:** {receipt['blockNumber']}\n"
+        
+        if is_outgoing:
+            message += f"**Destinataire:** `{tx['to']}`\n"
+        else:
+            message += f"**Expéditeur:** `{tx['from']}`\n"
+            
+        # Ajout du lien Basescan
+        message += f"\n🔍 [Voir sur Basescan](https://basescan.org/tx/{tx_hash})"
+        
+        # Envoi de la notification Discord
+        channel = client.get_channel(tracking_configs[address].channel_id)
+        if channel:
+            await channel.send(message)
+            logger.info(f"Notification envoyée pour la transaction {tx_hash}")
+        else:
+            logger.error(f"Canal Discord introuvable pour l'adresse {address}")
+            
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement de la transaction {tx_hash}: {str(e)}")
 
 # Lancer le bot
 bot.run(os.getenv('DISCORD_TOKEN')) 

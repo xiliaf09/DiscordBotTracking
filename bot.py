@@ -737,5 +737,53 @@ async def process_token_transfer(tx_hash: str, address: str, log: dict, is_outgo
     except Exception as e:
         logger.error(f"Erreur lors du traitement du transfert de token {tx_hash}: {str(e)}")
 
+@bot.command(name='importbanlist')
+async def import_banlist(ctx):
+    """Importe une banlist au format JSON (tableau de nombres)"""
+    try:
+        # Vérifier si un fichier est attaché
+        if not ctx.message.attachments:
+            await ctx.send("❌ Veuillez attacher un fichier JSON")
+            return
+
+        attachment = ctx.message.attachments[0]
+        
+        # Vérifier l'extension du fichier
+        if not attachment.filename.endswith('.json'):
+            await ctx.send("❌ Le fichier doit être au format JSON (.json)")
+            return
+
+        # Télécharger et lire le fichier
+        content = await attachment.read()
+        try:
+            banlist_data = json.loads(content)
+        except json.JSONDecodeError:
+            await ctx.send("❌ Le fichier n'est pas un JSON valide")
+            return
+
+        # Vérifier la structure du JSON (doit être un tableau)
+        if not isinstance(banlist_data, list):
+            await ctx.send("❌ Le JSON doit être un tableau de nombres")
+            return
+
+        # Vérifier que tous les éléments sont des nombres
+        if not all(isinstance(x, (int, str)) for x in banlist_data):
+            await ctx.send("❌ Tous les éléments doivent être des nombres")
+            return
+
+        # Convertir tous les éléments en chaînes de caractères
+        banlist_data = [str(x) for x in banlist_data]
+
+        # Sauvegarder la banlist
+        with open('banlist.json', 'w') as f:
+            json.dump(banlist_data, f, indent=4)
+
+        await ctx.send(f"✅ Banlist mise à jour avec succès ({len(banlist_data)} éléments)")
+        logger.info(f"Banlist mise à jour par {ctx.author.name} ({len(banlist_data)} éléments)")
+
+    except Exception as e:
+        await ctx.send(f"❌ Erreur: {str(e)}")
+        logger.error(f"Erreur lors de l'import de la banlist: {str(e)}")
+
 # Lancer le bot
 bot.run(os.getenv('DISCORD_TOKEN')) 
